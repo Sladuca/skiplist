@@ -10,6 +10,7 @@ type Link<T, const NUM_LEVELS: usize> = Option<NonNull<SkipListNode<T, NUM_LEVEL
 
 pub struct SkipList<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> {
     head: Box<SkipListNode<T, NUM_LEVELS>>,
+    rng: fastrand::Rng,
     len: usize,
 }
 
@@ -34,6 +35,16 @@ pub struct SkipListNode<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usi
     val: Option<T>,
     prev: Link<T, NUM_LEVELS>,
     next: [Link<T, NUM_LEVELS>; NUM_LEVELS],
+}
+
+impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> Drop for SkipListNode<T, NUM_LEVELS> {
+    fn drop(&mut self) {
+        let mut node = self.next[0].take();
+        while let Some(next) = node {
+            let mut next = unsafe { Box::from_raw(next.as_ptr()) };
+            node = next.next[0].take();
+        }
+    }
 }
 
 impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> SkipListNode<T, NUM_LEVELS> {
@@ -149,41 +160,26 @@ impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> SkipListNode<T,
     fn is_head(&self) -> bool {
         self.prev.is_none()
     }
-
-    // SAFETY: after this, all links in self.next[1..next.level] may dangle
-    // caller must ensure none of those links dangle
-    unsafe fn remove_next(&mut self) -> Option<Box<Self>> {
-        self.next[0].take().map(|p| {
-            let mut next = Box::from_raw(p.as_ptr());
-            next.prev = None;
-            next
-        })
-    }
-
-    // SAFETY: after this, all links in self.next[1..next.level] may dangle
-    // caller must ensure none of those links dangle
-    unsafe fn replace_next(&mut self, mut new_next: Box<Self>) -> Option<Box<Self>> {
-        let mut old_next = self.remove_next();
-        new_next.prev = Some(self.into());
-
-        // SAFETY: Box::into_raw can't be null
-        self.next[0] = Some(NonNull::new_unchecked(Box::into_raw(new_next)));
-
-        old_next
-    }
 }
 
 impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> SkipList<T, NUM_LEVELS> {
     pub fn new() -> Self {
         let head = Box::new(SkipListNode::<T, NUM_LEVELS>::new_head());
-        SkipList { head, len: 0 }
+        SkipList { head, rng: fastrand::Rng::new(), len: 0 }
     }
+
+    pub fn gen_level(&self) -> usize {
+        let max_level = NUM_LEVELS - 1;
+        let mask = (1 << max_level) - 1;
+        let rand = self.rng.usize(..);
+        let jawn = rand & mask;
+        jawn.trailing_ones() as usize
+    }
+    
 
     pub fn find(&self, item: &T) -> Option<&T> {
         let node = self.find_node(item);
         
-        println!("item: {:?}, node: {:?}", item, node);
-
         match node.val() {
             Some(val) => {
                 if val == item {
@@ -221,8 +217,7 @@ impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> SkipList<T, NUM
     }
 
     pub fn insert(&mut self, item: T) {
-        let new_node_level = gen_level::<NUM_LEVELS>();
-        println!("level: {:?}", new_node_level);
+        let new_node_level = self.gen_level();
         
         let new_node = Box::new(SkipListNode::<T, NUM_LEVELS>::new(
             item,
@@ -269,26 +264,12 @@ impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> SkipList<T, NUM
     }
 }
 
-fn min(a: usize, b: usize) -> usize {
-    if a <= b {
-        a
-    } else {
-        b
-    }
-}
-
-pub fn gen_level<const NUM_LEVELS: usize>() -> usize {
-    let max_level = NUM_LEVELS - 1;
-    let mask = (1 << max_level) - 1;
-    let rand = fastrand::usize(..);
-    let jawn = rand & mask;
-    jawn.trailing_ones() as usize
-}
 
 
 #[cfg(test)]
 mod tests {
     use super::SkipList;
+    use criterion::{criterion_group, criterion_main, black_box, Criterion};
 
     #[test]
     fn insert_and_lookup_same_order() {
@@ -301,8 +282,6 @@ mod tests {
         for i in 0..10 {
             assert!(l.contains(&i));
         }
-        
-        println!("{:#?}", l);
     }
 
     #[test]
@@ -320,4 +299,5 @@ mod tests {
             assert!(l.contains(&i));
         }
     }
+
 }
