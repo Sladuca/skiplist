@@ -8,3 +8,10 @@ edition = "2018"
 [dependencies]
 fastrand = "1.4.1"
 bitintr = "0.3"
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "bench"
+harness = false
