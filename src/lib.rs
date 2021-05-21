@@ -8,7 +8,7 @@ use std::fmt;
 // INVARIANT: if a link is Some, it must point to a SkipListNode
 type Link<T, const NUM_LEVELS: usize> = Option<NonNull<SkipListNode<T, NUM_LEVELS>>>;
 
-pub struct SkipList<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> {
+pub struct SkipList<T: PartialEq + Debug, const NUM_LEVELS: usize> {
     head: Box<SkipListNode<T, NUM_LEVELS>>,
     rng: fastrand::Rng,
     len: usize,
@@ -30,14 +30,14 @@ impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> Debug for SkipL
 }
 
 #[derive(Debug)]
-pub struct SkipListNode<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> {
+pub struct SkipListNode<T: PartialEq + Debug, const NUM_LEVELS: usize> {
     level: usize,
     val: Option<T>,
     prev: Link<T, NUM_LEVELS>,
     next: [Link<T, NUM_LEVELS>; NUM_LEVELS],
 }
 
-impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> Drop for SkipListNode<T, NUM_LEVELS> {
+impl<T: PartialEq + Debug, const NUM_LEVELS: usize> Drop for SkipListNode<T, NUM_LEVELS> {
     fn drop(&mut self) {
         let mut node = self.next[0].take();
         while let Some(next) = node {
@@ -47,7 +47,7 @@ impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> Drop for SkipLi
     }
 }
 
-impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> SkipListNode<T, NUM_LEVELS> {
+impl<T: PartialEq + Debug, const NUM_LEVELS: usize> SkipListNode<T, NUM_LEVELS> {
     fn val(&self) -> Option<&T> {
         self.val.as_ref()
     }
@@ -139,7 +139,7 @@ impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> SkipListNode<T,
     }
 }
 
-impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> SkipListNode<T, NUM_LEVELS> {
+impl<T: PartialEq + Debug, const NUM_LEVELS: usize> SkipListNode<T, NUM_LEVELS> {
     fn new_head() -> SkipListNode<T, NUM_LEVELS> {
         SkipListNode {
             level: NUM_LEVELS - 1,
@@ -162,7 +162,7 @@ impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> SkipListNode<T,
     }
 }
 
-impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> SkipList<T, NUM_LEVELS> {
+impl<T: PartialEq + Debug, const NUM_LEVELS: usize> SkipList<T, NUM_LEVELS> {
     pub fn new() -> Self {
         let head = Box::new(SkipListNode::<T, NUM_LEVELS>::new_head());
         SkipList { head, rng: fastrand::Rng::new(), len: 0 }
@@ -175,48 +175,41 @@ impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> SkipList<T, NUM
         let jawn = rand & mask;
         jawn.trailing_ones() as usize
     }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
     
 
-    pub fn find(&self, item: &T) -> Option<&T> {
-        let node = self.find_node(item);
-        
-        match node.val() {
-            Some(val) => {
-                if val == item {
-                    Some(val)
-                } else {
-                    None
-                }
-            }
-            None => None,
-        }
+    pub fn find(&self, f: impl FnMut(&T) -> bool) -> Option<&T> {
+        self.find_node(f).val()
     }
 
-    pub fn find_node(&self, item: &T) -> &SkipListNode<T, NUM_LEVELS> {
+    pub fn find_node(&self, mut f: impl FnMut(&T) -> bool) -> &SkipListNode<T, NUM_LEVELS> {
         let mut node = self.head.as_ref();
         for level in (0..NUM_LEVELS).rev() {
-            node = node.proceed_at_level_while(level, move |_, next| {
-                next.val().map_or(false, |v2| item >= v2)
+            node = node.proceed_at_level_while(level, |_, next| {
+                next.val().map_or(false, |v2| f(v2))
             });
         }
         node
     }
 
-    pub fn find_node_mut(&mut self, item: &T) -> &mut SkipListNode<T, NUM_LEVELS> {
+    pub fn find_node_mut(&mut self, mut f: impl FnMut(&T) -> bool) -> &mut SkipListNode<T, NUM_LEVELS> {
         let mut node = self.head.as_mut();
         for level in (0..NUM_LEVELS).rev() {
-            node = node.proceed_at_level_while_mut(level, move |_, next| {
-                next.val().map_or(false, |v2| item >= v2)
+            node = node.proceed_at_level_while_mut(level, |_, next| {
+                next.val().map_or(false, |v2| f(v2))
             })
         }
         node
     }
 
-    pub fn contains(&self, item: &T) -> bool {
-        self.find(item).is_some()
+    pub fn contains(&self, f: impl FnMut(&T) -> bool, check: impl Fn(&T) -> bool) -> bool {
+        self.find(f).map_or(false, |v| check(v))
     }
 
-    pub fn insert(&mut self, item: T) {
+    pub fn insert(&mut self, item: T, mut cmp: impl FnMut(&T, &T) -> bool) {
         let new_node_level = self.gen_level();
         
         let new_node = Box::new(SkipListNode::<T, NUM_LEVELS>::new(
@@ -235,8 +228,8 @@ impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> SkipList<T, NUM
         let old_next = loop {
             level -= 1;
 
-            node = node.proceed_at_level_while_mut(level, move |_, next| {
-                next.val().map_or(false, |v2| item >= v2)
+            node = node.proceed_at_level_while_mut(level, |_, next| {
+                next.val().map_or(false, |v2| cmp(item, v2))
             });
 
             
@@ -251,6 +244,8 @@ impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> SkipList<T, NUM
                 }
             }
         };
+
+        self.len += 1;
 
         unsafe { new_node.as_mut().prev = Some(node.into())}
 
@@ -269,18 +264,16 @@ impl<T: PartialOrd + PartialEq + Debug, const NUM_LEVELS: usize> SkipList<T, NUM
 #[cfg(test)]
 mod tests {
     use super::SkipList;
-    use criterion::{criterion_group, criterion_main, black_box, Criterion};
 
     #[test]
     fn insert_and_lookup_same_order() {
         let mut l = SkipList::<usize, 8>::new();
         for i in 0..10 {
-            l.insert(i);
+            l.insert(i, |val, next| val >= next);
         }
-        
 
         for i in 0..10 {
-            assert!(l.contains(&i));
+            assert!(l.contains(|v| v <= &i, |v| v == &i));
         }
     }
 
@@ -290,13 +283,13 @@ mod tests {
         let mut nums = Vec::new();
         for _ in 0..200 {
             let i = fastrand::i32(..);
-            l.insert(i);
+            l.insert(i, |val, next| val >= next);
             nums.push(i);
         }
         fastrand::shuffle(nums.as_mut());
 
         for i in nums.into_iter() {
-            assert!(l.contains(&i));
+            assert!(l.contains(|v| v <= &i, |v| v == &i));
         }
     }
 

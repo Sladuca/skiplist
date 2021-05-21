@@ -7,13 +7,13 @@ fn basic<const N: usize>(c: &mut Criterion) {
     let mut nums = Vec::with_capacity(N);
     for _ in 0..N {
         let i = rng.i32(..);
-        l.insert(i);
+        l.insert(i, |val, next| val >= next);
         nums.push(i);
     }
 
     c.bench_function(format!("contains(): N = {}", N).as_str(), |b| b.iter(|| {
         let i = rng.usize(0..nums.len());
-        l.contains(&nums[i])
+        assert!(l.contains(|v| v <= &nums[i], |v| v == &nums[i]));
     }));
 }
 
