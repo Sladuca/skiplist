@@ -1,6 +1,7 @@
 #![feature(maybe_uninit_array_assume_init)]
 use std::ptr::{self, NonNull};
 use std::fmt::Debug;
+use std::cmp::{PartialOrd, Ordering};
 use std::fmt;
 
 // NUM_LEVELS must be <= std::mem::size_of<usize>()
@@ -179,10 +180,9 @@ impl<T: PartialEq + Debug, const NUM_LEVELS: usize> SkipList<T, NUM_LEVELS> {
     pub fn len(&self) -> usize {
         self.len
     }
-    
 
-    pub fn find(&self, f: impl FnMut(&T) -> bool) -> Option<&T> {
-        self.find_node(f).val()
+    pub fn find(&self, mut f: impl FnMut(&T) -> Ordering) -> Option<&T> {
+        self.find_node(|v| f(v) != Ordering::Greater).val()
     }
 
     pub fn find_node(&self, mut f: impl FnMut(&T) -> bool) -> &SkipListNode<T, NUM_LEVELS> {
@@ -205,11 +205,11 @@ impl<T: PartialEq + Debug, const NUM_LEVELS: usize> SkipList<T, NUM_LEVELS> {
         node
     }
 
-    pub fn contains(&self, f: impl FnMut(&T) -> bool, check: impl Fn(&T) -> bool) -> bool {
-        self.find(f).map_or(false, |v| check(v))
+    pub fn contains(&self, mut f: impl FnMut(&T) -> Ordering) -> bool {
+        self.find(|v| f(v)).map_or(false, |v| f(v) == Ordering::Equal)
     }
 
-    pub fn insert(&mut self, item: T, mut cmp: impl FnMut(&T, &T) -> bool) {
+    pub fn insert(&mut self, item: T, mut cmp: impl FnMut(&T, &T) -> Ordering) {
         let new_node_level = self.gen_level();
         
         let new_node = Box::new(SkipListNode::<T, NUM_LEVELS>::new(
@@ -229,7 +229,7 @@ impl<T: PartialEq + Debug, const NUM_LEVELS: usize> SkipList<T, NUM_LEVELS> {
             level -= 1;
 
             node = node.proceed_at_level_while_mut(level, |_, next| {
-                next.val().map_or(false, |v2| cmp(item, v2))
+                next.val().map_or(false, |v2| cmp(item, v2) != Ordering::Less)
             });
 
             
@@ -257,6 +257,30 @@ impl<T: PartialEq + Debug, const NUM_LEVELS: usize> SkipList<T, NUM_LEVELS> {
             None => {}
         }
     }
+
+    // fn remove(&mut self, mut cmp: impl FnMut(&T) -> Ordering) -> T {
+    //     let mut node = self.head.as_mut();
+    //     let mut level = NUM_LEVELS;
+    //     let old_next = loop {
+    //         level -= 1;
+
+    //         node = node.proceed_at_level_while_mut(level, |_, next| {
+    //             next.val().map_or(false, |v2| cmp(v2) != Ordering::Less)
+    //         });
+
+            
+    //         if level <= new_node_level {
+    //             let old_next = node.next[level].replace(new_node);
+
+    //             // SAFETY: new_node hasn't been deleted yet since we're still inserting it
+    //             unsafe { new_node.as_mut().next[level] = old_next };
+                
+    //             if level == 0 {
+    //                 break old_next;
+    //             }
+    //         }
+    //     };
+    // }
 }
 
 
@@ -269,11 +293,11 @@ mod tests {
     fn insert_and_lookup_same_order() {
         let mut l = SkipList::<usize, 8>::new();
         for i in 0..10 {
-            l.insert(i, |val, next| val >= next);
+            l.insert(i, |curr, next| curr.cmp(next));
         }
 
         for i in 0..10 {
-            assert!(l.contains(|v| v <= &i, |v| v == &i));
+            assert!(l.contains(|v| v.cmp(&i)));
         }
     }
 
@@ -283,13 +307,14 @@ mod tests {
         let mut nums = Vec::new();
         for _ in 0..200 {
             let i = fastrand::i32(..);
-            l.insert(i, |val, next| val >= next);
+            l.insert(i, |curr, next| curr.cmp(next));
             nums.push(i);
         }
+
         fastrand::shuffle(nums.as_mut());
 
         for i in nums.into_iter() {
-            assert!(l.contains(|v| v <= &i, |v| v == &i));
+            assert!(l.contains(|v| v.cmp(&i)));
         }
     }
 
